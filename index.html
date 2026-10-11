@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registo de Videiras (8 Ha)</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 15px; background: #f4f6f9; color: #333; }
+        h2 { text-align: center; color: #4A154B; margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; }
+        select, input { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; font-size: 16px; background: white; }
+        button { width: 100%; padding: 14px; background: #2eb872; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+        button.export { background: #118ab2; }
+        button.gps-btn { background: #ffb703; color: #000; margin-bottom: 5px; }
+        .foto-preview { width: 100%; max-height: 200px; object-fit: cover; border-radius: 8px; display: none; margin-top: 10px; border: 1px solid #ddd; }
+        .log-container { margin-top: 25px; background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; max-height: 350px; overflow-y: auto; }
+        .log-item { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; display: flex; align-items: center; justify-content: space-between; }
+        .log-info { flex-grow: 1; padding-right: 10px; }
+        .log-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; background: #eee; border: 1px solid #ddd; }
+        .btn-apagar { background: #e63946; padding: 5px 10px; font-size: 12px; width: auto; margin-top: 5px; display: inline-block; }
+    </style>
+</head>
+<body>
+
+    <h2>🍇 Marcador de Videiras Independente</h2>
+    
+    <div class="form-group">
+        <label>Talhão / Parcela:</label>
+        <select id="talhao">
+            <option value="Vinha Velha">Vinha Velha</option>
+            <option value="Talhão do Rio">Talhão do Rio</option>
+            <option value="Parcela Touriga">Parcela Touriga</option>
+            <option value="Outro">Outro / Geral</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>Número da Linha / Fila:</label>
+        <input type="number" id="linha" placeholder="Ex: 24" inputmode="numeric">
+    </div>
+
+    <div class="form-group">
+        <label>Problema Detetado:</label>
+        <select id="problema">
+            <option value="Seca / Morta">🔴 Seca / Morta</option>
+            <option value="Doente (Esca/Flavescência)">🟡 Doente (Esca/Flavescência)</option>
+            <option value="Falha / Vazia">⚪ Falha / Espaço Vazio</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>Coordenadas GPS:</label>
+        <button class="gps-btn" type="button" onclick="obterGPS()">📍 Capturar Posição Atual</button>
+        <input type="text" id="gps" readonly placeholder="Aguardando GPS...">
+    </div>
+
+    <div class="form-group">
+        <label>Fotografia da Videira:</label>
+        <!-- capture="environment" força a abertura da câmara traseira no telemóvel -->
+        <input type="file" id="fotoInput" accept="image/*" capture="environment" onchange="processarFoto(event)">
+        <img id="previewImg" class="foto-preview" src="" alt="Antevisão">
+    </div>
+
+    <button onclick="salvarRegisto()">💾 Gravar Videira</button>
+    <button class="export" onclick="exportarCSV()">📥 Exportar para Excel (CSV)</button>
+
+    <h3>Registos na Memória (<span id="contador">0</span>):</h3>
+    <div class="log-container" id="listaRegistos"></div>
+
+    <script>
+        let db;
+        let fotoBase64 = "";
+
+        // 1. Inicializar a Base de Dados do Telemóvel (IndexedDB)
+        const request = indexedDB.open("VinhaIndependenteDB", 1);
+        request.onupgradeneeded = function(e) {
+            db = e.target.result;
+            db.createObjectStore("videiras", { keyPath: "id", autoIncrement: true });
+        };
+        request.onsuccess = function(e) {
+            db = e.target.result;
+            atualizarInterface();
+        };
+
+        // 2. Capturar o GPS com Alta Precisão
+        function obterGPS() {
+            const gpsInput = document.getElementById('gps');
+            gpsInput.placeholder = "A localizar satélites...";
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => { 
+                        gpsInput.value = `${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)}`; 
+                    },
+                    (error) => { 
+                        alert("Ative a localização/GPS nas definições do seu telemóvel."); 
+                        gpsInput.placeholder = "Erro no GPS"; 
+                    },
+                    { enableHighAccuracy: true, timeout: 12000 }
+                );
+            } else { alert("O seu dispositivo não suporta GPS."); }
+        }
+
+        // 3. Processar e Compactar a Foto (para não sobrecarregar a memória)
+        function processarFoto(event) {
+            const reader = new FileReader();
+            reader.onload = function() {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 600; // Resolução suficiente para ver a videira no ecrã
+                    const scale = MAX_WIDTH / img.width;
+                    canvas.width = MAX_WIDTH;
+                    canvas.height = img.height * scale;
+                    
+                    const ctx = canvas.getContext("2d");
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    
+                    fotoBase64 = canvas.toDataURL("image/jpeg", 0.6); // Compressão equilibrada a 60%
+                    const preview = document.getElementById('previewImg');
+                    preview.src = fotoBase64;
+                    preview.style.display = 'block';
+                };
+                img.src = reader.result;
+            };
+            if(event.target.files[0]) { reader.readAsDataURL(event.target.files[0]); }
+        }
+
+        // 4. Salvar Registo Offline
+        function salvarRegisto() {
+            const talhao = document.getElementById('talhao').value;
+            const linha = document.getElementById('linha').value;
+            const problema = document.getElementById('problema').value;
+            const gps = document.getElementById('gps').value;
+
+            if (!linha || !gps) {
+                alert("Erro: Preencha o número da linha e clique no botão do GPS antes de gravar.");
+                return;
+            }
+
+            const novoRegisto = {
+                data: new Date().toLocaleString('pt-PT'),
+                talhao: talhao,
+                linha: linha,
+                problema: problema,
+                gps: gps,
+                foto: fotoBase64
+            };
+
+            const transaction = db.transaction(["videiras"], "readwrite");
+            const store = transaction.objectStore("videiras");
+            store.add(novoRegisto);
+
+            transaction.oncomplete = function() {
+                // Limpar apenas linha, GPS e foto para o próximo registo ser rápido
+                document.getElementById('linha').value = '';
+                document.getElementById('gps').value = '';
+                document.getElementById('fotoInput').value = '';
+                document.getElementById('previewImg').style.display = 'none';
+                fotoBase64 = "";
+                
+                atualizarInterface();
+                alert("Registo guardado com sucesso no telemóvel!");
+            };
+        }
+
+        // 5. Atualizar a listagem no ecrã
+        function atualizarInterface() {
+            const transaction = db.transaction(["videiras"], "readonly");
+            const store = transaction.objectStore("videiras");
+            const request = store.getAll();
+
+            request.onsuccess = function() {
+                const dados = request.result;
+                document.getElementById('contador').innerText = dados.length;
+                const lista = document.getElementById('listaRegistos');
+                lista.innerHTML = '';
+                
+                dados.slice().reverse().forEach(item => {
+                    let imgTag = item.foto ? `<img class="log-thumb" src="${item.foto}">` : '<div class="log-thumb" style="display:flex;align-items:center;justify-content:center;font-size:10px;color:#aaa;">Sem foto</div>';
+                    lista.innerHTML += `
+                        <div class="log-item">
+                            <div class="log-info">
+                                <b>${item.talhao} - Fila ${item.linha}</b><br>
+                                <span>${item.problema}</span><br>
+                                <small>${item.data} | GPS: ${item.gps}</small><br>
+                                <button class="btn-apagar" onclick="eliminarRegisto(${item.id})">Eliminar</button>
+                            </div>
+                            ${imgTag}
+                        </div>`;
+                });
+            };
+        }
+
+        // 6. Eliminar um registo individual se necessário
+        window.eliminarRegisto = function(id) {
+            if(confirm("Deseja apagar este registo?")) {
+                const transaction = db.transaction(["videiras"], "readwrite");
+                const store = transaction.objectStore("videiras");
+                store.delete(id);
+                transaction.oncomplete = function() { atualizarInterface(); };
+            }
+        }
+
+        // 7. Exportar tudo para um ficheiro Excel/CSV universal
+        function exportarCSV() {
+            const transaction = db.transaction(["videiras"], "readonly");
