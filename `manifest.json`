@@ -1,0 +1,10 @@
+```json
+{
+  "name": "Marcador de Videiras",
+  "short_name": "VinhaApp",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#4A154B",
+  "orientation": "portrait"
+}
